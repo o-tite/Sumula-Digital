@@ -98,6 +98,37 @@ export async function setPresence(input: {
   if (ss.match.refereeUserId !== input.user.id) throw new ForbiddenError();
   if (ss.status === "salvo") throw new StateError("Súmula salva — peça reabertura ao organizador");
 
+  // Unicidade de número de camisa por time neste jogo:
+  // se vai marcar presente OU alterar número, garantir que ninguém do mesmo time
+  // já está usando esse número.
+  if (input.present && input.jerseyNumber !== undefined && input.jerseyNumber !== null) {
+    const player = await prisma.player.findUnique({
+      where: { id: input.playerId },
+      select: { teamId: true }
+    });
+    if (!player) throw new NotFoundError("Jogador não encontrado");
+    const sameTeamPlayerIds = (
+      await prisma.player.findMany({
+        where: { teamId: player.teamId },
+        select: { id: true }
+      })
+    ).map((p) => p.id);
+    const conflict = await prisma.presenceRecord.findFirst({
+      where: {
+        scoresheetId: ss.id,
+        present: true,
+        jerseyNumber: input.jerseyNumber,
+        playerId: { in: sameTeamPlayerIds, not: input.playerId }
+      },
+      include: { player: { select: { fullName: true } } }
+    });
+    if (conflict) {
+      throw new ValidationError(
+        `Camisa #${input.jerseyNumber} já está com ${conflict.player.fullName} neste time.`
+      );
+    }
+  }
+
   const record = await prisma.presenceRecord.upsert({
     where: { scoresheetId_playerId: { scoresheetId: ss.id, playerId: input.playerId } },
     update: {
@@ -138,9 +169,8 @@ export async function setInitialGoalkeeper(input: {
     if (!present) {
       throw new ValidationError("Goleiro deve estar marcado como presente");
     }
-  } else if (!input.avulso) {
-    throw new ValidationError("Informe playerId ou avulso");
   }
+  // Sem playerId e sem avulso → limpa goleiro do time (operação de desmarcação)
 
   const update =
     input.side === "home"
@@ -155,15 +185,25 @@ export async function setInitialGoalkeeper(input: {
           awayGoalkeeperAvulsoJersey: input.avulso?.jersey ?? null
         };
 
-  // Atualiza tag de goleiro nos presence_records
+  // Limpa tag de goleiro APENAS dos jogadores do mesmo time
+  // (bug anterior limpava em ambos os times → não era possível ter goleiro nos dois)
+  const sideTeamId =
+    input.side === "home" ? ss.match.homeTeamId : ss.match.awayTeamId;
+  const sideTeamPlayerIds = (
+    await prisma.player.findMany({
+      where: { teamId: sideTeamId },
+      select: { id: true }
+    })
+  ).map((p) => p.id);
+  await prisma.presenceRecord.updateMany({
+    where: {
+      scoresheetId: ss.id,
+      isGoalkeeper: true,
+      playerId: { in: sideTeamPlayerIds }
+    },
+    data: { isGoalkeeper: false }
+  });
   if (input.playerId) {
-    await prisma.presenceRecord.updateMany({
-      where: {
-        scoresheetId: ss.id,
-        playerId: { in: ss.presenceRecords.filter((p) => p.isGoalkeeper).map((p) => p.playerId) }
-      },
-      data: { isGoalkeeper: false }
-    });
     await prisma.presenceRecord.update({
       where: { scoresheetId_playerId: { scoresheetId: ss.id, playerId: input.playerId } },
       data: { isGoalkeeper: true }

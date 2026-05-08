@@ -82,6 +82,8 @@ interface Props {
   venue: string | null;
 }
 
+const NO_AVULSO = null;
+
 function formatClock(seconds: number) {
   const mm = Math.floor(seconds / 60);
   const ss = seconds % 60;
@@ -95,6 +97,7 @@ export function ScoresheetScreen(props: Props) {
   );
   const [tab, setTab] = useState<"timeline" | "presence" | "elenco">("timeline");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [foulAlert, setFoulAlert] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [absenceModal, setAbsenceModal] = useState<{ playerId: string } | null>(null);
   const [eventModal, setEventModal] = useState<EventModalState | null>(null);
@@ -256,6 +259,26 @@ export function ScoresheetScreen(props: Props) {
     secondaryPlayerId?: string | null;
   }) {
     await action(`/api/sumula/matches/${props.matchId}/events`, args);
+
+    // Alerta de limite de faltas individuais (RF §11.3):
+    // se o regulamento habilita e o jogador acabou de atingir o limite, avisa.
+    if (
+      args.type === "falta" &&
+      args.playerId &&
+      props.regulation?.foulIndividualEnabled &&
+      props.regulation.foulIndividualLimit
+    ) {
+      // O state `ss` ainda reflete o pré-evento; +1 considera o que acabou de ser registrado.
+      const before = countPlayerFoulsInMatch(ss.timeline as any, args.playerId);
+      const after = before + 1;
+      if (after >= props.regulation.foulIndividualLimit) {
+        const player = playerById.get(args.playerId);
+        setFoulAlert(
+          `${player?.fullName ?? "Jogador"} atingiu ${after} faltas — limite ${props.regulation.foulIndividualLimit}.`
+        );
+        setTimeout(() => setFoulAlert(null), 5000);
+      }
+    }
   }
 
   async function recordPenaltyKick(teamId: string, playerId: string, converted: boolean) {
@@ -387,6 +410,8 @@ export function ScoresheetScreen(props: Props) {
           venue={props.venue}
           homeGoalkeeperPlayerId={ss.homeGoalkeeperPlayerId}
           awayGoalkeeperPlayerId={ss.awayGoalkeeperPlayerId}
+          homeHasAvulso={!!ss.homeGoalkeeperAvulso}
+          awayHasAvulso={!!ss.awayGoalkeeperAvulso}
           onTogglePresence={togglePresence}
           onSetJersey={setJersey}
           onSetInitialGoalkeeper={setInitialGoalkeeper}
@@ -436,6 +461,7 @@ export function ScoresheetScreen(props: Props) {
               teamId: side === "home" ? props.home.id : props.away.id
             })
           }
+          onSelectGoalkeeperInline={setInitialGoalkeeper}
           onEndPeriod={() => setEndPeriodModal(true)}
           playerById={playerById}
         />
@@ -483,6 +509,15 @@ export function ScoresheetScreen(props: Props) {
       {errorMsg && (
         <div className="fixed bottom-3 left-3 right-3 z-30 bg-danger text-white p-3 rounded-lg text-sm">
           {errorMsg}
+        </div>
+      )}
+
+      {foulAlert && (
+        <div
+          role="alert"
+          className="fixed top-20 left-3 right-3 z-30 bg-alert text-white p-3 rounded-lg text-sm font-semibold shadow"
+        >
+          ⚠ Limite de faltas individuais — {foulAlert}
         </div>
       )}
 
@@ -628,6 +663,8 @@ function PreGameView(props: {
   venue: string | null;
   homeGoalkeeperPlayerId: string | null;
   awayGoalkeeperPlayerId: string | null;
+  homeHasAvulso: boolean;
+  awayHasAvulso: boolean;
   onTogglePresence: (p: PresenceLite) => void;
   onSetJersey: (playerId: string, value: number | null) => void;
   onSetInitialGoalkeeper: (
@@ -660,12 +697,14 @@ function PreGameView(props: {
       {[props.home, props.away].map((team) => {
         const isHome = team.id === props.home.id;
         const goalkeeperId = isHome ? props.homeGoalkeeperPlayerId : props.awayGoalkeeperPlayerId;
+        const hasAvulso = isHome ? props.homeHasAvulso : props.awayHasAvulso;
         return (
           <PresenceTeamSection
             key={team.id}
             team={team}
             presence={props.presence}
             goalkeeperId={goalkeeperId}
+            hasAvulso={hasAvulso}
             onTogglePresence={props.onTogglePresence}
             onSetJersey={props.onSetJersey}
             onSelectGoalkeeper={(playerId, avulso) =>
@@ -695,6 +734,7 @@ function PresenceTeamSection({
   team,
   presence,
   goalkeeperId,
+  hasAvulso,
   onTogglePresence,
   onSetJersey,
   onSelectGoalkeeper
@@ -702,15 +742,20 @@ function PresenceTeamSection({
   team: TeamLite;
   presence: PresenceLite[];
   goalkeeperId: string | null;
+  hasAvulso?: boolean;
   onTogglePresence: (p: PresenceLite) => void;
   onSetJersey: (playerId: string, value: number | null) => void;
-  onSelectGoalkeeper: (playerId?: string, avulso?: { name: string; jersey: number }) => void;
+  onSelectGoalkeeper: (
+    playerId?: string,
+    avulso?: { name: string; jersey: number }
+  ) => void;
 }) {
   const [showAvulso, setShowAvulso] = useState(false);
   const [avulsoName, setAvulsoName] = useState("");
   const [avulsoJersey, setAvulsoJersey] = useState("");
 
-  const presents = presence.filter((p) => p.present && team.players.find((tp) => tp.id === p.playerId));
+  // RF §6.4: alguém é goleiro deste time? (cadastrado ou avulso)
+  const someoneIsGoalkeeper = !!goalkeeperId || !!hasAvulso;
 
   return (
     <section className="bg-white rounded-lg border border-surface-100">
@@ -719,21 +764,11 @@ function PresenceTeamSection({
         style={{ background: team.color }}
       >
         <span>{team.name}</span>
-        <select
-          value={goalkeeperId ?? ""}
-          onChange={(e) => onSelectGoalkeeper(e.target.value || undefined)}
-          className="text-ink text-xs rounded px-2 py-1"
-        >
-          <option value="">Goleiro inicial…</option>
-          {presents.map((p) => {
-            const player = team.players.find((tp) => tp.id === p.playerId)!;
-            return (
-              <option key={p.playerId} value={p.playerId}>
-                #{p.jerseyNumber ?? "—"} {player.fullName}
-              </option>
-            );
-          })}
-        </select>
+        {someoneIsGoalkeeper && (
+          <span className="text-[10px] uppercase tracking-wide bg-white/20 px-2 py-0.5 rounded">
+            Goleiro definido
+          </span>
+        )}
       </div>
 
       <ul className="divide-y divide-surface-100">
@@ -748,8 +783,14 @@ function PresenceTeamSection({
                 absenceType: null,
                 isGoalkeeper: false
               };
+            const isThisGoalkeeper = goalkeeperId === player.id;
+            // Botão luva só aparece quando jogador está presente E
+            // ou ele já é goleiro (para permitir desmarcar)
+            // ou ainda ninguém do time é goleiro.
+            const showGloveButton =
+              rec.present && (isThisGoalkeeper || !someoneIsGoalkeeper);
             return (
-              <li key={player.id} className="px-3 py-2 flex items-center gap-3">
+              <li key={player.id} className="px-3 py-2 flex items-center gap-2">
                 <input
                   inputMode="numeric"
                   pattern="[0-9]*"
@@ -759,20 +800,23 @@ function PresenceTeamSection({
                     onSetJersey(player.id, v ? Number(v) : null);
                   }}
                   className={`w-12 h-10 rounded-full text-center font-bold text-sm border-2 ${
-                    rec.present && (rec.jerseyNumber === null || rec.jerseyNumber === undefined)
+                    rec.present &&
+                    (rec.jerseyNumber === null || rec.jerseyNumber === undefined)
                       ? "border-danger"
                       : "border-surface-100"
                   }`}
                   placeholder="—"
                   disabled={!rec.present}
                 />
-                <div className="flex-1">
-                  <div className="font-medium text-sm">{player.fullName}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-sm truncate">
+                    {player.fullName}
+                  </div>
                   <div className="text-xs space-x-1">
                     {player.status === "suspenso" && (
                       <span className="text-danger">⚠ suspenso</span>
                     )}
-                    {goalkeeperId === player.id && (
+                    {isThisGoalkeeper && (
                       <span className="text-success">goleiro</span>
                     )}
                     {rec.absenceType && (
@@ -788,6 +832,29 @@ function PresenceTeamSection({
                     )}
                   </div>
                 </div>
+
+                {showGloveButton && (
+                  <button
+                    type="button"
+                    aria-label={
+                      isThisGoalkeeper ? "Remover como goleiro" : "Marcar como goleiro"
+                    }
+                    onClick={() =>
+                      onSelectGoalkeeper(isThisGoalkeeper ? undefined : player.id)
+                    }
+                    title={
+                      isThisGoalkeeper ? "Remover como goleiro" : "Marcar como goleiro"
+                    }
+                    className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${
+                      isThisGoalkeeper
+                        ? "bg-success text-white"
+                        : "bg-surface-100 text-ink"
+                    }`}
+                  >
+                    {isThisGoalkeeper ? "🧤" : "🥅"}
+                  </button>
+                )}
+
                 <button
                   onClick={() => onTogglePresence(rec)}
                   className={`px-3 py-2 rounded text-xs font-semibold touch-48 ${
@@ -803,47 +870,60 @@ function PresenceTeamSection({
           })}
       </ul>
 
-      <div className="p-2 border-t border-surface-100 text-xs">
-        <button
-          onClick={() => setShowAvulso((s) => !s)}
-          className="text-primary-500 font-medium"
-        >
-          + Goleiro avulso
-        </button>
-        {showAvulso && (
-          <div className="mt-2 flex gap-2">
-            <input
-              placeholder="Nome"
-              value={avulsoName}
-              onChange={(e) => setAvulsoName(e.target.value)}
-              className="flex-1 border border-surface-100 rounded px-2 py-1"
-            />
-            <input
-              inputMode="numeric"
-              placeholder="#"
-              value={avulsoJersey}
-              onChange={(e) => setAvulsoJersey(e.target.value.replace(/\D/g, ""))}
-              className="w-16 border border-surface-100 rounded px-2 py-1"
-            />
-            <button
-              onClick={() => {
-                if (avulsoName && avulsoJersey) {
-                  onSelectGoalkeeper(undefined, {
-                    name: avulsoName,
-                    jersey: Number(avulsoJersey)
-                  });
-                  setShowAvulso(false);
-                  setAvulsoName("");
-                  setAvulsoJersey("");
-                }
-              }}
-              className="bg-primary-500 text-white px-3 rounded font-semibold"
-            >
-              OK
-            </button>
-          </div>
-        )}
-      </div>
+      {/* Goleiro avulso só aparece quando ainda não há goleiro definido */}
+      {!someoneIsGoalkeeper && (
+        <div className="p-2 border-t border-surface-100 text-xs">
+          <button
+            onClick={() => setShowAvulso((s) => !s)}
+            className="text-primary-500 font-medium"
+          >
+            + Goleiro avulso
+          </button>
+          {showAvulso && (
+            <div className="mt-2 flex gap-2">
+              <input
+                placeholder="Nome"
+                value={avulsoName}
+                onChange={(e) => setAvulsoName(e.target.value)}
+                className="flex-1 border border-surface-100 rounded px-2 py-1"
+              />
+              <input
+                inputMode="numeric"
+                placeholder="#"
+                value={avulsoJersey}
+                onChange={(e) => setAvulsoJersey(e.target.value.replace(/\D/g, ""))}
+                className="w-16 border border-surface-100 rounded px-2 py-1"
+              />
+              <button
+                onClick={() => {
+                  if (avulsoName && avulsoJersey) {
+                    onSelectGoalkeeper(undefined, {
+                      name: avulsoName,
+                      jersey: Number(avulsoJersey)
+                    });
+                    setShowAvulso(false);
+                    setAvulsoName("");
+                    setAvulsoJersey("");
+                  }
+                }}
+                className="bg-primary-500 text-white px-3 rounded font-semibold"
+              >
+                OK
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {someoneIsGoalkeeper && hasAvulso && (
+        <div className="p-2 border-t border-surface-100 text-xs">
+          <button
+            onClick={() => onSelectGoalkeeper(undefined, undefined)}
+            className="text-danger font-medium"
+          >
+            Remover goleiro avulso
+          </button>
+        </div>
+      )}
     </section>
   );
 }
@@ -869,6 +949,11 @@ function PeriodView(props: {
   onTogglePresence: (p: PresenceLite) => void;
   onSetJersey: (playerId: string, value: number | null) => void;
   onChangeGoalkeeper: (side: "home" | "away") => void;
+  onSelectGoalkeeperInline: (
+    side: "home" | "away",
+    playerId?: string,
+    avulso?: { name: string; jersey: number }
+  ) => void;
   onEndPeriod: () => void;
   playerById: Map<string, PlayerLite & { teamId: string }>;
 }) {
@@ -1002,21 +1087,35 @@ function PeriodView(props: {
 
       {props.tab === "presence" && (
         <div className="space-y-3">
-          {[props.home, props.away].map((team) => (
-            <PresenceTeamSection
-              key={team.id}
-              team={team}
-              presence={props.ss.presence}
-              goalkeeperId={
-                team.id === props.home.id
-                  ? props.ss.homeGoalkeeperPlayerId
-                  : props.ss.awayGoalkeeperPlayerId
-              }
-              onTogglePresence={props.onTogglePresence}
-              onSetJersey={props.onSetJersey}
-              onSelectGoalkeeper={() => undefined}
-            />
-          ))}
+          {[props.home, props.away].map((team) => {
+            const isHome = team.id === props.home.id;
+            return (
+              <PresenceTeamSection
+                key={team.id}
+                team={team}
+                presence={props.ss.presence}
+                goalkeeperId={
+                  isHome
+                    ? props.ss.homeGoalkeeperPlayerId
+                    : props.ss.awayGoalkeeperPlayerId
+                }
+                hasAvulso={
+                  isHome
+                    ? !!props.ss.homeGoalkeeperAvulso
+                    : !!props.ss.awayGoalkeeperAvulso
+                }
+                onTogglePresence={props.onTogglePresence}
+                onSetJersey={props.onSetJersey}
+                onSelectGoalkeeper={(playerId, avulso) =>
+                  props.onSelectGoalkeeperInline(
+                    isHome ? "home" : "away",
+                    playerId,
+                    avulso
+                  )
+                }
+              />
+            );
+          })}
         </div>
       )}
 
