@@ -1,0 +1,296 @@
+// Saint Clair — Schema Prisma (MVP Entrega 1)
+// SQLite em dev: enums representados como String + checks na camada de aplicação.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// =====================
+// Autenticação / Usuários
+// =====================
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  passwordHash   String
+  name           String
+  role           String   // 'ORGANIZER' | 'REFEREE'
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  refereeMatches Match[]  @relation("RefereeMatches")
+}
+
+// =====================
+// Campeonato
+// =====================
+model ChampionshipSeries {
+  id            String         @id @default(cuid())
+  name          String
+  championships Championship[]
+  createdAt     DateTime       @default(now())
+}
+
+model Championship {
+  id              String              @id @default(cuid())
+  seriesId        String?
+  series          ChampionshipSeries? @relation(fields: [seriesId], references: [id])
+  name            String
+  modality        String              // 'futsal' | 'suico' | 'campo'
+  season          String
+  status          String              @default("em_andamento") // 'em_andamento' | 'encerrado'
+  regulation      Regulation?
+  teams           Team[]
+  rounds          Round[]
+  suspensionLogs  SuspensionLog[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+}
+
+// =====================
+// Regulamento
+// =====================
+model Regulation {
+  id             String       @id @default(cuid())
+  championshipId String       @unique
+  championship   Championship @relation(fields: [championshipId], references: [id], onDelete: Cascade)
+
+  numPeriods           Int @default(2)
+  periodDurationMin    Int @default(20)
+  intervalDurationMin  Int @default(5)
+
+  cardTypes              String  @default("amarelo_vermelho")
+  cardBlueMode           String?
+  cardBlueDurationMin    Int?
+  yellowAccumulationLimit Int    @default(3)
+
+  foulFreeKickEnabled  Boolean @default(false)
+  foulFreeKickLimit    Int     @default(5)
+  foulIndividualEnabled Boolean @default(false)
+  foulIndividualLimit  Int?
+
+  penaltiesEnabled    Boolean @default(false)
+  penaltyKicksPerTeam Int     @default(5)
+  pointsPenaltyWin    Int     @default(2)
+  pointsPenaltyLoss   Int     @default(1)
+
+  pointsWin  Int @default(3)
+  pointsDraw Int @default(1)
+  pointsLoss Int @default(0)
+
+  tiebreakOrder String @default("[\"confronto_direto\",\"saldo_gols\",\"gols_pro\"]")
+
+  goalkeeperRankingFormula String @default("media")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// =====================
+// Times e jogadores
+// =====================
+model Team {
+  id             String       @id @default(cuid())
+  championshipId String
+  championship   Championship @relation(fields: [championshipId], references: [id], onDelete: Cascade)
+  name           String
+  logoUrl        String?
+  color          String?
+
+  players          Player[]
+  homeMatches      Match[]  @relation("HomeTeam")
+  awayMatches      Match[]  @relation("AwayTeam")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([championshipId])
+}
+
+model Player {
+  id        String       @id @default(cuid())
+  teamId    String
+  team      Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  fullName  String
+  status    String       @default("ativo") // 'ativo' | 'suspenso' | 'inativo'
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  presenceRecords PresenceRecord[]
+  suspensionLogs  SuspensionLog[]
+  timelineEvents  TimelineEvent[]  @relation("EventPlayer")
+  timelineSecondaryEvents TimelineEvent[] @relation("SecondaryPlayer")
+
+  @@index([teamId])
+}
+
+// =====================
+// Rodadas e jogos
+// =====================
+model Round {
+  id             String       @id @default(cuid())
+  championshipId String
+  championship   Championship @relation(fields: [championshipId], references: [id], onDelete: Cascade)
+  number         Int
+  label          String?
+  matches        Match[]
+  createdAt      DateTime     @default(now())
+
+  @@index([championshipId, number])
+}
+
+model Match {
+  id              String       @id @default(cuid())
+  roundId         String
+  round           Round        @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  homeTeamId      String
+  homeTeam        Team         @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeamId      String
+  awayTeam        Team         @relation("AwayTeam", fields: [awayTeamId], references: [id])
+  refereeUserId   String?
+  refereeUser     User?        @relation("RefereeMatches", fields: [refereeUserId], references: [id])
+  refereeNameText String?
+  homeResponsible String?
+  awayResponsible String?
+  scheduledAt     DateTime
+  venue           String?
+  status          String       @default("agendado")
+
+  scoresheet     Scoresheet?
+  suspensionLogs SuspensionLog[]
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([roundId, status])
+  @@index([refereeUserId])
+}
+
+// =====================
+// Súmula
+// =====================
+model Scoresheet {
+  id      String @id @default(cuid())
+  matchId String @unique
+  match   Match  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  status         String   @default("em_andamento") // 'em_andamento' | 'em_revisao' | 'salvo'
+  uiState        String   @default("pre_jogo")      // estados de UI da máquina
+  currentPeriod  Int      @default(0)
+  periodStartedAt DateTime?
+
+  homeScore Int @default(0)
+  awayScore Int @default(0)
+
+  homeGoalkeeperPlayerId       String?
+  awayGoalkeeperPlayerId       String?
+  homeGoalkeeperAvulsoName     String?
+  homeGoalkeeperAvulsoJersey   Int?
+  awayGoalkeeperAvulsoName     String?
+  awayGoalkeeperAvulsoJersey   Int?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  savedAt    DateTime?
+
+  editLog String @default("[]")
+
+  shareCardUrl String?
+  shareDocText String?
+
+  presenceRecords PresenceRecord[]
+  timelineEvents  TimelineEvent[]
+  penaltyShoot    PenaltyShoot?
+  occurrences     Occurrence[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PresenceRecord {
+  id           String        @id @default(cuid())
+  scoresheetId String
+  scoresheet   Scoresheet    @relation(fields: [scoresheetId], references: [id], onDelete: Cascade)
+  playerId     String
+  player       Player        @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  jerseyNumber Int?
+  present      Boolean       @default(false)
+  absenceType  String?
+  isGoalkeeper Boolean       @default(false)
+
+  @@unique([scoresheetId, playerId])
+  @@index([scoresheetId])
+  @@index([playerId, present])
+}
+
+model TimelineEvent {
+  id                 String     @id @default(cuid())
+  scoresheetId       String
+  scoresheet         Scoresheet @relation(fields: [scoresheetId], references: [id], onDelete: Cascade)
+  type               String     // EventType
+  clockLabel         String
+  playerId           String?
+  player             Player?    @relation("EventPlayer", fields: [playerId], references: [id])
+  teamId             String
+  secondaryPlayerId  String?
+  secondaryPlayer    Player?    @relation("SecondaryPlayer", fields: [secondaryPlayerId], references: [id])
+  period             Int
+  recordedAt         DateTime   @default(now())
+  autoGeneratedFromId String?
+  clientEventId      String?    @unique
+
+  @@index([scoresheetId, period])
+  @@index([scoresheetId, type])
+  @@index([playerId, type])
+}
+
+model PenaltyShoot {
+  id           String     @id @default(cuid())
+  scoresheetId String     @unique
+  scoresheet   Scoresheet @relation(fields: [scoresheetId], references: [id], onDelete: Cascade)
+  homeScore    Int        @default(0)
+  awayScore    Int        @default(0)
+  finished     Boolean    @default(false)
+  kicks        PenaltyKick[]
+  createdAt    DateTime   @default(now())
+}
+
+model PenaltyKick {
+  id              String       @id @default(cuid())
+  penaltyShootId  String
+  penaltyShoot    PenaltyShoot @relation(fields: [penaltyShootId], references: [id], onDelete: Cascade)
+  teamId          String
+  playerId        String?
+  kickOrder       Int
+  converted       Boolean
+
+  @@unique([penaltyShootId, kickOrder])
+  @@index([penaltyShootId, kickOrder])
+}
+
+model SuspensionLog {
+  id             String           @id @default(cuid())
+  playerId       String
+  player         Player           @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  championshipId String
+  championship   Championship     @relation(fields: [championshipId], references: [id], onDelete: Cascade)
+  reason         String
+  sourceMatchId  String
+  sourceMatch    Match            @relation(fields: [sourceMatchId], references: [id], onDelete: Cascade)
+  confirmed      Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+
+  @@index([playerId, championshipId, confirmed])
+  @@index([sourceMatchId])
+}
+
+model Occurrence {
+  id             String         @id @default(cuid())
+  scoresheetId   String
+  scoresheet     Scoresheet     @relation(fields: [scoresheetId], references: [id], onDelete: Cascade)
+  type           String
+  description    String
+  playersInvolved String        @default("[]")
+  recordedAt     DateTime       @default(now())
+}
