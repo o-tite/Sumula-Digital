@@ -153,23 +153,30 @@ function RegulationForm({
   }
 
   return (
-    <div className="space-y-4 bg-white rounded-lg p-4 border border-surface-100">
-      <div className="grid gap-3 md:grid-cols-3">
-        <NumberField label="Períodos" value={form.numPeriods} onChange={(v) => set("numPeriods", v)} />
-        <NumberField
-          label="Duração do período (min)"
-          value={form.periodDurationMin}
-          onChange={(v) => set("periodDurationMin", v)}
-        />
-        <NumberField
-          label="Intervalo (min)"
-          value={form.intervalDurationMin}
-          onChange={(v) => set("intervalDurationMin", v)}
-        />
-      </div>
+    <div className="space-y-4">
+      <Block
+        title="Tempo de jogo"
+        description="Define a estrutura do cronômetro: número de períodos, duração e intervalo entre eles."
+      >
+        <div className="grid gap-3 md:grid-cols-3">
+          <NumberField label="Períodos" value={form.numPeriods} onChange={(v) => set("numPeriods", v)} />
+          <NumberField
+            label="Duração do período (min)"
+            value={form.periodDurationMin}
+            onChange={(v) => set("periodDurationMin", v)}
+          />
+          <NumberField
+            label="Intervalo (min)"
+            value={form.intervalDurationMin}
+            onChange={(v) => set("intervalDurationMin", v)}
+          />
+        </div>
+      </Block>
 
-      <fieldset className="border-t pt-3">
-        <legend className="text-sm font-semibold mb-2">Cartões</legend>
+      <Block
+        title="Cartões"
+        description="Quais cartões são permitidos no campeonato e como o sistema gera suspensões automáticas."
+      >
         <div className="grid gap-3 md:grid-cols-3">
           <Select
             label="Tipos"
@@ -205,10 +212,12 @@ function RegulationForm({
             onChange={(v) => set("yellowAccumulationLimit", v)}
           />
         </div>
-      </fieldset>
+      </Block>
 
-      <fieldset className="border-t pt-3">
-        <legend className="text-sm font-semibold mb-2">Faltas</legend>
+      <Block
+        title="Faltas"
+        description="Habilita os contadores de tiro livre por time e a punição por faltas individuais."
+      >
         <div className="grid gap-3 md:grid-cols-3">
           <Toggle
             label="Tiro livre por faltas do time"
@@ -235,10 +244,12 @@ function RegulationForm({
             />
           )}
         </div>
-      </fieldset>
+      </Block>
 
-      <fieldset className="border-t pt-3">
-        <legend className="text-sm font-semibold mb-2">Pênaltis</legend>
+      <Block
+        title="Pênaltis"
+        description="Disputa após empate no tempo regulamentar e pontuação aplicada na classificação."
+      >
         <div className="grid gap-3 md:grid-cols-3">
           <Toggle
             label="Disputa habilitada"
@@ -265,19 +276,23 @@ function RegulationForm({
             </>
           )}
         </div>
-      </fieldset>
+      </Block>
 
-      <fieldset className="border-t pt-3">
-        <legend className="text-sm font-semibold mb-2">Pontuação</legend>
+      <Block
+        title="Pontuação"
+        description="Pontos atribuídos a vitória, empate e derrota no tempo regulamentar."
+      >
         <div className="grid gap-3 md:grid-cols-3">
           <NumberField label="Vitória" value={form.pointsWin} onChange={(v) => set("pointsWin", v)} />
           <NumberField label="Empate" value={form.pointsDraw} onChange={(v) => set("pointsDraw", v)} />
           <NumberField label="Derrota" value={form.pointsLoss} onChange={(v) => set("pointsLoss", v)} />
         </div>
-      </fieldset>
+      </Block>
 
-      <fieldset className="border-t pt-3">
-        <legend className="text-sm font-semibold mb-2">Goleiro menos vazado</legend>
+      <Block
+        title="Goleiro menos vazado"
+        description="Como o ranking de goleiros é calculado a partir dos jogos do campeonato."
+      >
         <Select
           label="Fórmula"
           value={form.goalkeeperRankingFormula}
@@ -288,7 +303,7 @@ function RegulationForm({
           ]}
           onChange={(v) => set("goalkeeperRankingFormula", v)}
         />
-      </fieldset>
+      </Block>
 
       {error && <p className="text-sm text-danger">{error}</p>}
       <button
@@ -299,6 +314,28 @@ function RegulationForm({
         {saving ? "Salvando…" : "Salvar regulamento"}
       </button>
     </div>
+  );
+}
+
+function Block({
+  title,
+  description,
+  children
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="bg-white rounded-lg border border-surface-100 overflow-hidden">
+      <header className="px-4 py-3 bg-surface-50 border-b border-surface-100">
+        <h3 className="font-semibold text-ink text-sm">{title}</h3>
+        {description && (
+          <p className="text-xs text-muted mt-0.5">{description}</p>
+        )}
+      </header>
+      <div className="p-4">{children}</div>
+    </section>
   );
 }
 
